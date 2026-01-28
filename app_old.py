@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
-import download_infarmed_data
 import ui_style
 
 # --- Configuração Inicial ---
@@ -23,7 +21,7 @@ def calcular_pva(pvp):
     else: return ((pvp - 12.73) / 1.1051) + (0.004 * (pvp / 1.06))
 
 @st.cache_data
-def process_data(file_sales, file_master, file_discounts, master_mtime=None):
+def process_data(file_sales, file_master, file_discounts):
     # ==============================================================================
     # 1. PROCESSAMENTO DE VENDAS (INFOPREX) - Lógica de process_infoprex.py
     # ==============================================================================
@@ -224,31 +222,11 @@ def run_abc_analysis(df):
 
 st.sidebar.header("📁 Carregar Dados")
 up_sales = st.sidebar.file_uploader("Vendas (Infoprex .txt/.csv)", type=['txt', 'csv'])
-
-# --- AUTO DOWNLOAD MASTER ---
-st.sidebar.markdown("### 2. Mestre (Infarmed)")
-if st.sidebar.button("🔄 Atualizar Base de Dados"):
-    with st.spinner("A descarregar do Infarmed..."):
-        if download_infarmed_data.download_infarmed_xls():
-            st.sidebar.success("Download com sucesso!")
-            st.cache_data.clear() 
-        else:
-            st.sidebar.error("Erro no download.")
-
-master_path = "allPackages_python.xls"
-has_master = os.path.exists(master_path)
-
-if has_master:
-    t = os.path.getmtime(master_path)
-    dt = pd.to_datetime(t, unit='s')
-    st.sidebar.caption(f"✅ Ficheiro disponível ({dt.strftime('%d/%m/%Y %H:%M')})")
-else:
-    st.sidebar.warning("⚠️ Ficheiro em falta. Clique em Atualizar.")
-
+up_master = st.sidebar.file_uploader("Mestre (Infarmed .xls)", type=['xls'])
 up_desc = st.sidebar.file_uploader("Descontos (.xlsx)", type=['xlsx'])
 
-if up_sales and has_master and up_desc:
-    df, df_master = process_data(up_sales, master_path, up_desc, master_mtime=os.path.getmtime(master_path))
+if up_sales and up_master and up_desc:
+    df, df_master = process_data(up_sales, up_master, up_desc)
     
     if df is not None and not isinstance(df, str):
         # ABC
