@@ -245,9 +245,9 @@ if up_sales and up_master and up_desc:
             # --- SIMULADOR ---
             st.divider()
             st.sidebar.markdown("### ⚙️ Simulação")
-            regime = st.sidebar.radio("Regime:", ["Utente", "Pensionista"])
-            p_col = 'P_PENSIONISTA' if regime == "Pensionista" else 'P_UTENTE'
-            lbl_p = "Pr. Pen." if regime == "Pensionista" else "Pr. Ut."
+            regime = st.sidebar.radio("Regime:", ["Geral", "Especial"])
+            p_col = 'P_PENSIONISTA' if regime == "Especial" else 'P_UTENTE'
+            lbl_p = "Pr. Pen." if regime == "Especial" else "Pr. Ut."
             
             tol = st.sidebar.number_input(f"Tolerância {lbl_p} (€)", 0.0, 5.0, 0.5, 0.1)
             
