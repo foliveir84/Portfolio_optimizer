@@ -7,6 +7,26 @@ import ui_style
 
 # --- Configuração Inicial ---
 st.set_page_config(page_title="Análise Genéricos ABC/XYZ", layout="wide")
+
+
+master_path = "allPackages_python.xls"
+if 'startup_check_done' not in st.session_state:
+
+    # Se o ficheiro NÃO existe, forçamos o download
+    if not os.path.exists(master_path):
+        with st.spinner("⚠️ Base de dados em falta. A descarregar automaticamente do Infarmed..."):
+            success = download_infarmed_data.download_infarmed_xls()
+            if success:
+                st.toast("Base de dados descarregada com sucesso!", icon="✅")
+            else:
+                st.error("Falha crítica no download automático.")
+
+    # (Opcional) Se quiseres forçar atualização sempre que abres a app,
+    # remove o 'if not os.path.exists(...)' e deixa apenas o download.
+
+    # Marca como feito para o Streamlit não repetir isto a cada clique na app
+    st.session_state['startup_check_done'] = True
+
 ui_style.init_session_state()
 ui_style.apply_custom_style()
 
