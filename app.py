@@ -419,7 +419,7 @@ if up_sales and has_master and up_desc:
                         'Delta Preço': '{:+.2f}€', 'Ganho Est.': '{:.2f}€',
                         'Pr. Atual': '{:.2f}€', 'Pr. Novo': '{:.2f}€'
                     }).background_gradient(subset=['Ganho Est.'], cmap='Greens'),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                     column_config={
                         "Ganho_Visual": None,
