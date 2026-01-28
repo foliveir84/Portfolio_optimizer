@@ -1,0 +1,24 @@
+# Python & System
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.vscode/
+.idea/
+
+# Data Files (Ignorar dados sensíveis da farmácia)
+*.csv
+*.xls
+*.xlsx
+*.txt
+*.json
+
+# Streamlit
+.streamlit/
+
+# Exceto ficheiros de configuração se necessário
+!requirements.txt
+!README.md
+!GEMINI.MD
+!*.py
