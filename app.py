@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 import download_infarmed_data
+import ui_help
 import ui_style
 
 # --- Configuração Inicial ---
@@ -430,6 +431,8 @@ if up_sales and has_master and up_desc:
                         "Pr. Novo": st.column_config.NumberColumn(f"{lbl_p} Novo", format="%.2f €")
                     }
                 )
+                ui_help.show_glossary()
+
             else:
                 st.info("Portefólio Otimizado.")
         else:
