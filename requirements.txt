@@ -1,6 +1,7 @@
 streamlit
-matplotlib
 pandas
 numpy
 openpyxl
+requests
+matplotlib
 xlrd>=2.0.1
