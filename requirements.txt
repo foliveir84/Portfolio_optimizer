@@ -5,3 +5,4 @@ openpyxl
 requests
 matplotlib
 xlrd>=2.0.1
+plotly

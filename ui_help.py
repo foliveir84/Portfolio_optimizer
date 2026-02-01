@@ -22,20 +22,23 @@ def show_glossary():
 
         with tab2:
             st.markdown("""
-            **1. Matriz de Decisão Estratégica (4 Quadrantes)**
-            Cruza o *Volume de Vendas* (Eixo X) com o *Ganho Unitário Adicional* (Eixo Y).
+            **1. Matriz de Saúde do Portfólio (Interativa)**
+            Esta ferramenta visualiza a *saúde atual* do seu stock.
             
-            * **💎 OURO (Canto Superior Direito):** Produtos com muita saída e grande aumento de margem. **Ação:** Troca obrigatória e imediata. Prioridade máxima da equipa.
-            * **🐄 CASH COW (Canto Inferior Direito):** Produtos que vendem muito, mas o ganho extra por unidade é pequeno (ex: +0.05€). **Ação:** O lucro vem da quantidade. Trocar, mas sem urgência crítica.
-            * **🎯 NICHO (Canto Superior Esquerdo):** Produtos que vendem pouco, mas cada troca dá um lucro enorme (ex: +5.00€). **Ação:** Garantir stock, pois cada venda conta muito.
-            * **❓ INTERROGAÇÃO (Canto Inferior Esquerdo):** Pouco volume e pouco ganho. **Ação:** Baixa prioridade.
+            * **Eixo Vertical (Altura):** Representa o **Lucro Real Total** que o produto gera hoje. Quanto mais alto, mais importante esse produto é para a farmácia.
+            * **Tamanho da Bola:** O potencial de ganho extra. Bolas grandes significam grandes oportunidades.
+            * **Código de Cores (O Semáforo):**
+                * 🔴 **VERMELHO (Crítico):** O produto vende bem, mas a sua margem atual é muito inferior à alternativa. **Ação:** Trocar imediatamente.
+                * 🟡 **AMARELO (Atenção):** Existe margem para melhorar, mas não é urgente.
+                * 🟢 **VERDE (Otimizado):** O produto já é a melhor opção do mercado. **Ação:** Garantir stock e evitar ruturas.
             
+            **Objetivo do Gestor:** "Arrefecer" o gráfico. Transformar as bolas vermelhas do topo em bolas verdes, mantendo-as na parte superior (alto lucro).
+
             ---
             
-            **2. Ponte de Margem (Antes vs. Depois)**
-            Mostra o impacto financeiro direto no Top 10 produtos.
+            **2. Ponte de Margem (Top 10)**
+            Mostra o "salto" financeiro possível nos 10 produtos mais críticos.
             
-            * **Barra Cinzenta:** O lucro total que teve com o produto atual.
-            * **Barra Colorida:** O lucro total que *poderia ter tido* com a sugestão.
-            * **Objetivo:** Visualizar o "salto" de rentabilidade. Se a barra colorida for o dobro da cinzenta, justifica qualquer esforço de mudança.
+            * **Barra Cinzenta:** O que já ganha hoje.
+            * **Barra Azul:** O dinheiro "extra" que ficaria na farmácia se trocasse a marca.
             """)

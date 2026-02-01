@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
-import plotly.express as px
+import matplotlib.pyplot as plt
 import download_infarmed_data
 import ui_help
 import ui_style
@@ -156,22 +156,25 @@ def process_data(file_sales, file_master, file_discounts, master_mtime=None):
         df_desc = pd.read_excel(file_discounts)
         df_desc.columns = [c.upper().strip() for c in df_desc.columns]
 
-        # Validação de colunas obrigatórias (BD_ACTUAL.xlsx)
-        required_cols = ['CNP', 'DESC', 'LAB']
-        missing = [c for c in required_cols if c not in df_desc.columns]
-        if missing:
-            raise ValueError(f"Colunas em falta no ficheiro de descontos: {', '.join(missing)}")
+        # Detectar colunas dinamicamente
+        lab_col = next(
+            (c for c in df_desc.columns if 'LAB' in c), 'LAB_DEFAULT')
+        if lab_col == 'LAB_DEFAULT':
+            df_desc['LAB_DEFAULT'] = 'Geral'
+        cnp_col = next((c for c in df_desc.columns if 'CNP' in c), 'CNP')
+        desc_col = next((c for c in df_desc.columns if 'DESC' in c), 'DESC')
 
-        # Limpeza e Conversão
-        df_desc['CNP'] = pd.to_numeric(df_desc['CNP'], errors='coerce').fillna(0).astype(int).astype(str)
-        
-        # Converte inteiro (ex: 50) para decimal (0.50)
-        df_desc['DESC'] = pd.to_numeric(df_desc['DESC'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0) / 100.0
+        df_desc[cnp_col] = pd.to_numeric(
+            df_desc[cnp_col], errors='coerce').fillna(0).astype(int).astype(str)
+        df_desc[desc_col] = df_desc[desc_col].apply(lambda x: float(str(x).replace(
+            ',', '.'))/100 if float(str(x).replace(',', '.')) > 1 else float(str(x).replace(',', '.')))
 
         # Merge
-        df_master = pd.merge(df_master, df_desc[['CNP', 'DESC', 'LAB']], left_on='N_REGISTO', right_on='CNP', how='left')
-        df_master['DESC_COMERCIAL'] = df_master['DESC'].fillna(0.0)
-        df_master['LABORATORIO_DESC'] = df_master['LAB'].fillna('Outros/Sem Acordo')
+        df_master = pd.merge(df_master, df_desc[[
+                             cnp_col, desc_col, lab_col]], left_on='N_REGISTO', right_on=cnp_col, how='left')
+        df_master['DESC_COMERCIAL'] = df_master[desc_col].fillna(0.0)
+        df_master['LABORATORIO_DESC'] = df_master[lab_col].fillna(
+            'Outros/Sem Acordo')
 
         # Calcular Margem Teórica (Estrutural)
         df_master['MARGEM_TEORICA'] = (
@@ -356,88 +359,98 @@ if up_sales and os.path.exists(master_path) and up_desc:
 
                 # --- GRÁFICOS (BUSINESS INTELLIGENCE) ---
                 st.markdown("### 📊 Análise Visual")
-                chart_type = st.radio("Tipo de Gráfico:", ["Matriz de Saúde (Lucro vs Oportunidade)", "Ponte de Margem (Top 10 Impacto)"], horizontal=True)
+                chart_type = st.radio("Tipo de Gráfico:", [
+                                      "Matriz Estratégica (4 Quadrantes)", "Ponte de Margem (Antes vs Depois)"], horizontal=True)
 
-                if chart_type == "Matriz de Saúde (Lucro vs Oportunidade)":
-                    # Matriz Interativa
-                    fig = px.scatter(
-                        rdf,
-                        x="Vol",
-                        y="Margem Total Atual",
-                        size="Ganho Est.",  # Tamanho da bola = Dinheiro a ganhar
-                        color="Ganho Est.", # Cor = Urgência
-                        color_continuous_scale=["#00ff00", "#ffff00", "#ff0000"], # Verde -> Vermelho
-                        hover_name="Produto",
-                        custom_data=['Sugestão', 'Ganho Est.', 'Margem Total Atual', 'Vol', 'Pr. Atual', 'Pr. Novo'],
-                        labels={
-                            "Vol": "Volume de Vendas (6M)",
-                            "Margem Total Atual": "Lucro Real Atual (€)",
-                            "Ganho Est.": "Potencial de Melhoria (€)"
-                        },
-                        title="<b>Matriz de Saúde do Portfólio</b><br><span style='font-size:12px'>Quanto mais alto = Mais Lucro Real | <span style='color:red'>Vermelho</span> = Troca Urgente | <span style='color:green'>Verde</span> = Otimizado</span>"
-                    )
+                if chart_type == "Matriz Estratégica (4 Quadrantes)":
+                    fig, ax = plt.subplots(figsize=(10, 5))
+                    # Tema Escuro/Neon
+                    fig.patch.set_facecolor('#0e0b16')
+                    ax.set_facecolor('#0e0b16')
 
-                    # Forçar 2 casas decimais em todos os campos numéricos do hover
-                    # customdata segue a ordem definida acima: [0:Sugestão, 1:Ganho, 2:Margem, 3:Vol, 4:Pr.At, 5:Pr.Novo]
-                    fig.update_traces(
-                        hovertemplate="<b>%{hovertext}</b><br><br>Volume: %{customdata[3]:.2f}<br>Lucro Real: %{customdata[2]:.2f}€<br>Sugestão: %{customdata[0]}<br>Ganho Potencial: %{customdata[1]:.2f}€<br>Preço Atual: %{customdata[4]:.2f}€<br>Preço Novo: %{customdata[5]:.2f}€<extra></extra>"
-                    )
+                    x = rdf['Vol']
+                    y = rdf['Ganho Unit Delta']
+                    x_mid = x.mean() if not x.empty else 0
+                    y_mid = y.mean() if not y.empty else 0
 
-                    # Layout Dark/Neon
-                    fig.update_layout(
-                        template="plotly_dark",
-                        height=550,
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        font=dict(family="Sans-serif", size=12, color="white"),
-                        margin=dict(l=20, r=20, t=60, b=20)
-                    )
-                    
-                    # Linhas Médias (Referência)
-                    fig.add_hline(y=rdf['Margem Total Atual'].mean(), line_dash="dot", line_color="gray", annotation_text="Média Lucro")
-                    fig.add_vline(x=rdf['Vol'].mean(), line_dash="dot", line_color="gray", annotation_text="Média Vol.")
+                    # Linhas Médias (Cruz)
+                    ax.axvline(x_mid, color='#d900ff',
+                               linestyle='--', alpha=0.3)
+                    ax.axhline(y_mid, color='#d900ff',
+                               linestyle='--', alpha=0.3)
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    # Quadrantes
+                    ax.text(x.max(), y.max(), '💎 OURO\n(Alta Venda/Alto Ganho)',
+                            color='#00e5ff', ha='right', va='top', fontsize=9, fontweight='bold')
+                    ax.text(x.max(), y.min(), '🐄 CASH COW\n(Alta Venda/Baixo Ganho)',
+                            color='white', ha='right', va='bottom', fontsize=8)
+                    ax.text(x.min(), y.max(), '🎯 NICHO\n(Baixa Venda/Alto Ganho)',
+                            color='white', ha='left', va='top', fontsize=8)
 
-                else:  # Ponte de Margem (Plotly Bar)
-                    top_n = rdf.head(10).sort_values('Ganho Est.', ascending=True)
-                    
-                    # Preparar dados para o Plotly (Formato Longo)
-                    top_n_melt = top_n.melt(id_vars=['Produto'], value_vars=['Margem Total Atual', 'Ganho Est.'], 
-                                          var_name='Tipo', value_name='Valor')
-                    
-                    # Renomear para legenda bonita
-                    top_n_melt['Tipo'] = top_n_melt['Tipo'].map({
-                        'Margem Total Atual': 'O que já ganha',
-                        'Ganho Est.': 'O que PODE ganhar a mais'
-                    })
+                    # Scatter
+                    sizes = (rdf['Ganho Est.'] /
+                             (rdf['Ganho Est.'].max() + 1) * 500) + 50
+                    ax.scatter(x, y, s=sizes, c='#00e5ff',
+                               alpha=0.7, edgecolors='white')
 
-                    fig = px.bar(
-                        top_n_melt,
-                        y="Produto",
-                        x="Valor",
-                        color="Tipo",
-                        orientation='h',
-                        color_discrete_map={'O que já ganha': '#555555', 'O que PODE ganhar a mais': '#00e5ff'},
-                        title="<b>Top 10: O Salto de Rentabilidade</b>",
-                        text_auto='.2f'
-                    )
+                    # --- NOVO: ETIQUETAS NOS TOP PRODUTOS ---
+                    # Vamos etiquetar apenas os 7 melhores para não sujar o gráfico
+                    top_items = rdf.head(7)
 
-                    fig.update_layout(
-                        template="plotly_dark",
-                        height=600,
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        legend_title_text="",
-                        xaxis_title="Margem Total (€)"
-                    )
-                    
-                    # Formatar Tooltip da Barra
-                    fig.update_traces(
-                        hovertemplate="<b>%{y}</b><br>%{fullData.name}: %{x:.2f}€<extra></extra>"
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
+                    for idx, row in top_items.iterrows():
+                        # Lógica simples para afastar o texto da bola
+                        ax.annotate(
+                            # Corta nomes muito longos
+                            row['Produto'][:45] + '...',
+                            (row['Vol'], row['Ganho Unit Delta']),
+                            xytext=(5, 5), textcoords='offset points',
+                            color='white', fontsize=5, alpha=0.9
+                        )
+                    # ----------------------------------------
+
+                    ax.set_xlabel('Volume (Unidades)', color='white')
+                    ax.set_ylabel('Ganho Unitário Extra (€)', color='white')
+                    ax.tick_params(colors='white')
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
+                    ax.spines['bottom'].set_visible(True)
+                    ax.spines['bottom'].set_color('white')
+                    ax.spines['left'].set_visible(True)
+                    ax.spines['left'].set_color('white')
+                    ax.grid(color='gray', linestyle=':', alpha=0.3)
+                    st.pyplot(fig)
+
+                else:  # Ponte de Margem
+                    top_n = rdf.head(10).sort_values(
+                        'Ganho Est.', ascending=True)
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    fig.patch.set_facecolor('#0e0b16')
+                    ax.set_facecolor('#0e0b16')
+
+                    y_pos = np.arange(len(top_n))
+                    height = 0.35
+
+                    # Barras
+                    ax.barh(y_pos - height/2, top_n['Margem Total Atual'],
+                            height, label='Margem Atual', color='#444444')
+                    bars_new = ax.barh(
+                        y_pos + height/2, top_n['Margem Total Nova'], height, label='Nova Margem', color='#00e5ff')
+
+                    ax.set_yticks(y_pos)
+                    ax.set_yticklabels(top_n['Produto'], color='white')
+                    ax.set_xlabel('Margem Total (€)', color='white')
+                    ax.legend(facecolor='#1a1625', labelcolor='white')
+                    ax.tick_params(colors='white')
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
+                    ax.spines['bottom'].set_visible(True)
+                    ax.spines['bottom'].set_color('white')
+
+                    # Labels nas barras
+                    for bar in bars_new:
+                        ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
+                                f' €{int(bar.get_width())}', va='center', color='white', fontsize=8)
+                    st.pyplot(fig)
 
                 # --- TABELA FINAL ---
                 st.dataframe(
