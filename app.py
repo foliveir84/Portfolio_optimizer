@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import matplotlib.pyplot as plt
 import download_infarmed_data
 import ui_help
 import ui_style
@@ -10,27 +11,25 @@ import ui_style
 st.set_page_config(page_title="Análise Genéricos ABC/XYZ", layout="wide")
 
 # ==============================================================================
-# 0. SISTEMA DE LOGIN (NOVO)
+# 0. SISTEMA DE LOGIN (Versão Simples via Secrets)
 # ==============================================================================
 
 
 def check_login():
-    """Gere a autenticação simples."""
+    """Gere a autenticação usando o ficheiro .streamlit/secrets.toml."""
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
 
     if st.session_state.authenticated:
         return True
 
-    # Interface de Login
     st.markdown("### 🔐 Acesso Restrito")
 
-    # Podes substituir este dicionário por st.secrets ou base de dados
-    # Carrega os utilizadores diretamente do ficheiro secrets.toml
+    # Tenta carregar utilizadores
     try:
         USERS = st.secrets["users"]
-    except FileNotFoundError:
-        st.error("Ficheiro .streamlit/secrets.toml não encontrado!")
+    except Exception:
+        st.error("Erro: Configure o ficheiro .streamlit/secrets.toml")
         st.stop()
 
     c1, c2 = st.columns([1, 2])
@@ -49,29 +48,26 @@ def check_login():
 
 
 if not check_login():
-    st.stop()  # Pára a execução aqui se não estiver logado
+    st.stop()
 
-# --- INÍCIO DA APLICAÇÃO (Apenas corre se autenticado) ---
+# --- APP PRINCIPAL ---
 
 master_path = "allPackages_python.xls"
 if 'startup_check_done' not in st.session_state:
     if not os.path.exists(master_path):
-        with st.spinner("⚠️ Base de dados em falta. A descarregar automaticamente do Infarmed..."):
-            success = download_infarmed_data.download_infarmed_xls()
-            if success:
-                st.toast("Base de dados descarregada com sucesso!", icon="✅")
-            else:
-                st.error("Falha crítica no download automático.")
+        download_infarmed_data.download_infarmed_xls()
     st.session_state['startup_check_done'] = True
 
 ui_style.init_session_state()
 ui_style.apply_custom_style()
 
-# --- Lógica de Negócio ---
+# ==============================================================================
+# 1. LÓGICA DE DADOS
+# ==============================================================================
 
 
 def calcular_pva(pvp):
-    """Cálculo do PVA conforme regras oficiais."""
+    """Fórmula oficial do PVA (Preço Venda Armazenista)."""
     if pd.isna(pvp):
         return 0.0
     if pvp <= 6.68:
@@ -90,103 +86,62 @@ def calcular_pva(pvp):
 
 @st.cache_data
 def process_data(file_sales, file_master, file_discounts, master_mtime=None):
-    # ==============================================================================
-    # 1. PROCESSAMENTO DE VENDAS
-    # ==============================================================================
     try:
-        df_sales = None
+        # --- A. VENDAS (INFOPREX) ---
+        file_sales.seek(0)
         try:
-            file_sales.seek(0)
             df_sales = pd.read_csv(
                 file_sales, sep='\t', encoding='latin-1', on_bad_lines='skip', dtype=str)
-            if df_sales.shape[1] < 5:
-                raise ValueError("Colunas insuficientes")
         except:
-            try:
-                file_sales.seek(0)
-                df_sales = pd.read_csv(
-                    file_sales, sep=';', encoding='latin-1', on_bad_lines='skip', dtype=str)
-            except:
-                return None, "Erro crítico ao ler ficheiro de Vendas."
+            df_sales = pd.read_csv(
+                file_sales, sep=';', encoding='latin-1', on_bad_lines='skip', dtype=str)
 
-        # Filtro Localização
+        # Filtro Localização (Data mais recente)
         if 'DUV' in df_sales.columns and 'LOCALIZACAO' in df_sales.columns:
             df_sales['DUV_dt'] = pd.to_datetime(
                 df_sales['DUV'], dayfirst=True, format='mixed', errors='coerce')
-            valid_dates = df_sales.dropna(subset=['DUV_dt'])
-            if not valid_dates.empty:
-                max_date_idx = valid_dates['DUV_dt'].idxmax()
-                target_loc = df_sales.loc[max_date_idx, 'LOCALIZACAO']
-                df_sales = df_sales[df_sales['LOCALIZACAO']
-                                    == target_loc].copy()
+            valid = df_sales.dropna(subset=['DUV_dt'])
+            if not valid.empty:
+                max_loc = df_sales.loc[valid['DUV_dt'].idxmax(), 'LOCALIZACAO']
+                df_sales = df_sales[df_sales['LOCALIZACAO'] == max_loc].copy()
 
-        col_grupo = None
-        if 'GRUPOHOMOGENEO' in df_sales.columns:
-            col_grupo = 'GRUPOHOMOGENEO'
-        elif 'CODIGOHOMOGENEO' in df_sales.columns:
-            col_grupo = 'CODIGOHOMOGENEO'
-
+        # Filtro Grupo Homogéneo
+        col_grupo = next(
+            (c for c in ['GRUPOHOMOGENEO', 'CODIGOHOMOGENEO'] if c in df_sales.columns), None)
         if col_grupo:
-            df_sales = df_sales[df_sales[col_grupo].notna() & (
-                df_sales[col_grupo].str.strip() != '')]
+            df_sales = df_sales[df_sales[col_grupo].notna()]
 
         # Limpeza Numérica
-        numeric_cols = ['PVP', 'PCU', 'PVP5']
-        for c in numeric_cols:
+        for c in ['PVP', 'PCU']:
             if c in df_sales.columns:
-                df_sales[c] = df_sales[c].str.replace(',', '.', regex=False)
-                df_sales[c] = pd.to_numeric(
-                    df_sales[c], errors='coerce').fillna(0.0)
+                df_sales[c] = pd.to_numeric(df_sales[c].str.replace(
+                    ',', '.', regex=False), errors='coerce').fillna(0.0)
 
-        v_cols = [f'V({i})' for i in range(1, 7)]
+        # Vendas Totais
+        v_cols = [c for c in [f'V({i})' for i in range(
+            1, 7)] if c in df_sales.columns]
         for c in v_cols:
-            if c in df_sales.columns:
-                df_sales[c] = pd.to_numeric(
-                    df_sales[c], errors='coerce').fillna(0)
+            df_sales[c] = pd.to_numeric(df_sales[c], errors='coerce').fillna(0)
+        df_sales['VENDAS_6M'] = df_sales[v_cols].sum(axis=1)
 
-        valid_v_cols = [c for c in v_cols if c in df_sales.columns]
-        df_sales['VENDAS_6M'] = df_sales[valid_v_cols].sum(axis=1)
-
-        if 'PVP' in df_sales.columns and 'PCU' in df_sales.columns:
-            df_sales['MARGEM_REAL_UNIT'] = (
-                (df_sales['PVP'] / 1.06) - df_sales['PCU']).round(2)
-        else:
-            df_sales['MARGEM_REAL_UNIT'] = 0.0
-
+        # Margens
+        df_sales['MARGEM_REAL_UNIT'] = (
+            (df_sales['PVP']/1.06) - df_sales['PCU']).round(2) if 'PVP' in df_sales.columns else 0.0
         df_sales['MARGEM_REAL_TOTAL'] = df_sales['MARGEM_REAL_UNIT'] * \
             df_sales['VENDAS_6M']
         df_sales['CPR'] = df_sales['CPR'].astype(
             str).str.split('.').str[0].str.strip()
-
         if col_grupo:
             df_sales['NOME_GRUPO_SALES'] = df_sales[col_grupo]
 
-    except Exception as e:
-        return None, f"Erro no Processamento de Vendas: {e}"
-
-    # ==============================================================================
-    # 2. PROCESSAMENTO MESTRE & DESCONTOS (ATUALIZADO PARA LABORATÓRIO)
-    # ==============================================================================
-    try:
+        # --- B. MESTRE (INFARMED) ---
         df_master = pd.read_excel(file_master)
-
-        rename_map = {
-            'Nº registo': 'N_REGISTO', 'Preço (PVP)': 'PVP',
-            'Preço Utente': 'P_UTENTE', 'Preço Pensionistas': 'P_PENSIONISTA',
-            'Nome do medicamento': 'Nome'
-        }
-        df_master.rename(columns=rename_map, inplace=True)
+        df_master.rename(columns={'Nº registo': 'N_REGISTO', 'Preço (PVP)': 'PVP', 'Preço Utente': 'P_UTENTE',
+                         'Preço Pensionistas': 'P_PENSIONISTA', 'Nome do medicamento': 'Nome'}, inplace=True)
         df_master['N_REGISTO'] = pd.to_numeric(
             df_master['N_REGISTO'], errors='coerce').fillna(0).astype(int).astype(str)
-
         if 'CNPEM' in df_master.columns:
-            df_master['CNPEM'] = pd.to_numeric(
-                df_master['CNPEM'], errors='coerce')
             df_master = df_master.dropna(subset=['CNPEM'])
-
-        if 'Comerc.' in df_master.columns:
-            df_master = df_master[df_master['Comerc.'].astype(
-                str).str.strip() != "Não comercializado"]
 
         for c in ['PVP', 'P_UTENTE', 'P_PENSIONISTA']:
             if c in df_master.columns:
@@ -195,124 +150,66 @@ def process_data(file_sales, file_master, file_discounts, master_mtime=None):
                         str).str.replace(',', '.', regex=False)
                 df_master[c] = pd.to_numeric(
                     df_master[c], errors='coerce').fillna(0.0)
-
         df_master['PVA'] = df_master['PVP'].apply(calcular_pva)
 
-        # --- DESCONTOS COM LABORATÓRIO ---
-        # Ler ficheiro de descontos
+        # --- C. DESCONTOS & LABORATORIOS ---
         df_desc = pd.read_excel(file_discounts)
-
-        # Normalizar colunas (Procura LAB, Laboratorio, etc)
         df_desc.columns = [c.upper().strip() for c in df_desc.columns]
 
-        # Mapear coluna de laboratório
-        lab_col = next((c for c in df_desc.columns if 'LAB' in c), None)
+        # Detectar colunas dinamicamente
+        lab_col = next(
+            (c for c in df_desc.columns if 'LAB' in c), 'LAB_DEFAULT')
+        if lab_col == 'LAB_DEFAULT':
+            df_desc['LAB_DEFAULT'] = 'Geral'
         cnp_col = next((c for c in df_desc.columns if 'CNP' in c), 'CNP')
         desc_col = next((c for c in df_desc.columns if 'DESC' in c), 'DESC')
 
-        # Limpeza
         df_desc[cnp_col] = pd.to_numeric(
             df_desc[cnp_col], errors='coerce').fillna(0).astype(int).astype(str)
+        df_desc[desc_col] = df_desc[desc_col].apply(lambda x: float(str(x).replace(
+            ',', '.'))/100 if float(str(x).replace(',', '.')) > 1 else float(str(x).replace(',', '.')))
 
-        def clean_d(x):
-            try:
-                s = str(x).replace(',', '.')
-                f = float(s)
-                return f/100 if f > 1 else f
-            except:
-                return 0.0
-        df_desc[desc_col] = df_desc[desc_col].apply(clean_d)
-
-        if lab_col:
-            df_desc[lab_col] = df_desc[lab_col].astype(str).str.strip()
-        else:
-            # Se não existir coluna Lab, cria uma "Geral"
-            df_desc['LAB_DEFAULT'] = 'Geral'
-            lab_col = 'LAB_DEFAULT'
-
-        # Merge Descontos + Laboratório para o Mestre
-        df_master = pd.merge(
-            df_master,
-            df_desc[[cnp_col, desc_col, lab_col]],
-            left_on='N_REGISTO',
-            right_on=cnp_col,
-            how='left'
-        )
-
-        # Preencher vazios
+        # Merge
+        df_master = pd.merge(df_master, df_desc[[
+                             cnp_col, desc_col, lab_col]], left_on='N_REGISTO', right_on=cnp_col, how='left')
         df_master['DESC_COMERCIAL'] = df_master[desc_col].fillna(0.0)
         df_master['LABORATORIO_DESC'] = df_master[lab_col].fillna(
             'Outros/Sem Acordo')
 
-        # Calcular Margem Teórica
-        df_master['PVA_LIQ'] = df_master['PVA'] * \
-            (1 - df_master['DESC_COMERCIAL'])
+        # Calcular Margem Teórica (Estrutural)
         df_master['MARGEM_TEORICA'] = (
-            df_master['PVP'] / 1.06) - df_master['PVA_LIQ']
+            df_master['PVP']/1.06) - (df_master['PVA'] * (1 - df_master['DESC_COMERCIAL']))
 
-    except Exception as e:
-        return None, f"Erro no Processamento Mestre/Descontos: {e}"
-
-    # ==============================================================================
-    # 3. MERGE FINAL
-    # ==============================================================================
-    cols_sales = ['CPR', 'NOM', 'VENDAS_6M',
+        # --- D. MERGE FINAL ---
+        cols_s = ['CPR', 'NOM', 'VENDAS_6M',
                   'MARGEM_REAL_UNIT', 'MARGEM_REAL_TOTAL']
-    if 'NOME_GRUPO_SALES' in df_sales.columns:
-        cols_sales.append('NOME_GRUPO_SALES')
+        if 'NOME_GRUPO_SALES' in df_sales.columns:
+            cols_s.append('NOME_GRUPO_SALES')
+        df_final = pd.merge(
+            df_sales[cols_s], df_master, left_on='CPR', right_on='N_REGISTO', how='inner')
 
-    df_sales_clean = df_sales[cols_sales].copy()
-
-    df_final = pd.merge(
-        df_sales_clean,
-        df_master,
-        left_on='CPR',
-        right_on='N_REGISTO',
-        how='inner'
-    )
-
-    if 'CNPEM' not in df_final.columns:
-        return None, "Erro Crítico: Coluna CNPEM perdida no merge."
-
-    return df_final, df_master
+        return df_final, df_master
+    except Exception as e:
+        return None, str(e)
 
 
 def run_abc_analysis(df):
     if df.empty:
         return pd.DataFrame()
-
-    group_col = 'NOME_GRUPO_SALES' if 'NOME_GRUPO_SALES' in df.columns else 'Substância Ativa/DCI'
-    if group_col not in df.columns:
-        group_col = 'CNPEM'
-
-    grouped = df.groupby('CNPEM').agg({
-        'MARGEM_REAL_TOTAL': 'sum',
-        'VENDAS_6M': 'sum',
-        'CPR': 'count',
-        group_col: 'first'
-    }).rename(columns={'CPR': 'NUM_PRODUTOS', group_col: 'NOME_GRUPO'})
-
+    g_col = 'NOME_GRUPO_SALES' if 'NOME_GRUPO_SALES' in df.columns else 'CNPEM'
+    grouped = df.groupby('CNPEM').agg({'MARGEM_REAL_TOTAL': 'sum', 'VENDAS_6M': 'sum',
+                                       'CPR': 'count', g_col: 'first'}).rename(columns={g_col: 'NOME_GRUPO'})
     grouped = grouped.sort_values('MARGEM_REAL_TOTAL', ascending=False)
-
-    total = grouped['MARGEM_REAL_TOTAL'].sum()
-    if total == 0:
-        total = 1
-
-    grouped['PERC'] = grouped['MARGEM_REAL_TOTAL'].cumsum() / total
-
-    def get_class(x):
-        if x <= 0.80:
-            return 'A'
-        elif x <= 0.95:
-            return 'B'
-        return 'C'
-
-    grouped['CLASSE_ABC'] = grouped['PERC'].apply(get_class)
+    grouped['CLASSE_ABC'] = pd.cut(grouped['MARGEM_REAL_TOTAL'].cumsum(
+    ) / grouped['MARGEM_REAL_TOTAL'].sum(), bins=[0, 0.8, 0.95, 1.0], labels=['A', 'B', 'C'])
     return grouped
 
-# --- INTERFACE GRÁFICA PRINCIPAL ---
+# ==============================================================================
+# 2. INTERFACE GRÁFICA
+# ==============================================================================
 
 
+# Barra Lateral
 st.sidebar.markdown(
     f"👤 *Logado como: {st.session_state.get('username', 'Utilizador')}*")
 if st.sidebar.button("Terminar Sessão"):
@@ -320,198 +217,251 @@ if st.sidebar.button("Terminar Sessão"):
     st.rerun()
 
 st.sidebar.header("📁 Carregar Dados")
-up_sales = st.sidebar.file_uploader(
-    "Vendas (Infoprex .txt/.csv)", type=['txt', 'csv'])
+up_sales = st.sidebar.file_uploader("Vendas (Infoprex)", type=['txt', 'csv'])
+st.sidebar.caption("Base de Dados Infarmed: " +
+                   ("✅" if os.path.exists(master_path) else "⚠️"))
 
-# Auto Download
-st.sidebar.markdown("### 2. Mestre (Infarmed)")
-if st.sidebar.button("🔄 Atualizar Base de Dados"):
-    with st.spinner("A descarregar do Infarmed..."):
-        if download_infarmed_data.download_infarmed_xls():
-            st.sidebar.success("Download com sucesso!")
-            st.cache_data.clear()
-        else:
-            st.sidebar.error("Erro no download.")
-
-has_master = os.path.exists(master_path)
-if has_master:
-    t = os.path.getmtime(master_path)
-    dt = pd.to_datetime(t, unit='s')
-    st.sidebar.caption(
-        f"✅ Ficheiro disponível ({dt.strftime('%d/%m/%Y %H:%M')})")
-else:
-    st.sidebar.warning("⚠️ Ficheiro em falta.")
+if st.sidebar.button("🔄 Atualizar BD"):
+    download_infarmed_data.download_infarmed_xls()
+    st.rerun()
 
 up_desc = st.sidebar.file_uploader("Descontos (.xlsx)", type=['xlsx'])
 
-if up_sales and has_master and up_desc:
-    # Processamento
+# Processamento
+if up_sales and os.path.exists(master_path) and up_desc:
     df, df_master = process_data(
-        up_sales, master_path, up_desc, master_mtime=os.path.getmtime(master_path))
+        up_sales, master_path, up_desc, os.path.getmtime(master_path))
 
     if df is not None and not isinstance(df, str):
-        # --- FILTRO DE LABORATÓRIOS (NOVO) ---
-        # Obter lista de laboratórios disponíveis no ficheiro de descontos/mestre
-     # --- FILTRO DE LABORATÓRIOS (COM BOTÕES DE CONTROLE) ---
-        # Obter lista de laboratórios disponíveis
+        # --- FILTRO DE LABORATÓRIOS ---
         all_labs = sorted(
             [str(x) for x in df_master['LABORATORIO_DESC'].unique() if pd.notna(x)])
 
         st.sidebar.divider()
-        st.sidebar.markdown("### 🧪 Filtros de Substituição")
+        st.sidebar.markdown("### 🧪 Filtros")
 
-        # 1. Inicializar a lista no Session State se ainda não existir
-        # Isto garante que o filtro começa com "Todos" selecionados por defeito
+        # Inicialização do estado do filtro
         if 'lab_filter_state' not in st.session_state:
             st.session_state['lab_filter_state'] = all_labs
 
-        # 2. Botões de Ação Rápida
-        # Usamos colunas para ficarem lado a lado
-        col_btn1, col_btn2 = st.sidebar.columns(2)
-
-        # Botão "Selecionar Todos"
-        if col_btn1.button("✅ Todos", use_container_width=True):
+        # Botões de controlo
+        c1, c2 = st.sidebar.columns(2)
+        if c1.button("✅ Todos", use_container_width=True):
             st.session_state['lab_filter_state'] = all_labs
-
-        # Botão "Limpar" (Selecionar Nenhum)
-        if col_btn2.button("❌ Limpar", use_container_width=True):
+        if c2.button("❌ Limpar", use_container_width=True):
             st.session_state['lab_filter_state'] = []
 
-        # 3. Multiselect vinculado ao Session State
-        # O parâmetro 'key' liga este widget à variável que alterámos nos botões acima
-        selected_labs = st.sidebar.multiselect(
-            "Filtrar Laboratórios (Destino):",
-            options=all_labs,
-            key='lab_filter_state',
-            help="As sugestões de troca serão limitadas a estes laboratórios."
-        )
+        # Widget Multiselect
+        sel_labs = st.sidebar.multiselect(
+            "Laboratórios:", all_labs, key='lab_filter_state')
 
-        # Se a lista estiver vazia (usuário limpou tudo), avisamos ou assumimos todos?
-        # Lógica atual: Se vazio, não mostra nada (comportamento padrão do filtro isin)
-        if not selected_labs:
-            st.sidebar.warning(
-                "⚠️ Selecione pelo menos um laboratório para ver sugestões.")
-
+        # Análise ABC
         abc = run_abc_analysis(df)
         class_a = abc[abc['CLASSE_ABC'] == 'A'].reset_index()
-        class_a['LABEL'] = "#" + (class_a.index + 1).astype(str) + " - " + class_a['NOME_GRUPO'].astype(
-            str) + " (" + class_a['MARGEM_REAL_TOTAL'].apply(lambda x: f"€{x:,.0f}") + ")"
+        class_a['LABEL'] = "#" + (class_a.index + 1).astype(str) + \
+            " - " + class_a['NOME_GRUPO'].astype(str)
 
         st.subheader("🎯 Grupos Prioritários (Classe A)")
-
         if not class_a.empty:
             sel_label = st.selectbox("Selecione Grupo:", class_a['LABEL'])
             sel_cnpem = class_a[class_a['LABEL']
                                 == sel_label]['CNPEM'].values[0]
 
-            # --- SIMULADOR ---
+            # Parametros Simulação
             st.divider()
-            st.sidebar.markdown("### ⚙️ Simulação")
             regime = st.sidebar.radio("Regime:", ["Geral", "R Especial"])
             p_col = 'P_PENSIONISTA' if regime == "R Especial" else 'P_UTENTE'
             lbl_p = "Pr. Pen." if regime == "R Especial" else "Pr. Ut."
+            tol = st.sidebar.number_input("Tolerância (€)", 0.0, 5.0, 0.5)
 
-            tol = st.sidebar.number_input(
-                f"Tolerância {lbl_p} (€)", 0.0, 5.0, 0.5, 0.1)
-
-            # Dados
+            # Dados Filtrados
             products = df[df['CNPEM'] == sel_cnpem].copy(
             ).sort_values('VENDAS_6M', ascending=False)
-            market = df_master[df_master['CNPEM'] == sel_cnpem].copy()
+
+            # Aplicar Filtro de Laboratórios ao Mercado (Candidatos)
+            market = df_master[
+                (df_master['CNPEM'] == sel_cnpem) &
+                (df_master['LABORATORIO_DESC'].isin(sel_labs))
+            ].copy()
 
             results = []
-            tot_gain = 0.0
-
             for _, row in products.iterrows():
                 if row['VENDAS_6M'] <= 0:
                     continue
 
-                curr_id = row['CPR']
-                curr_margin_real = row['MARGEM_REAL_UNIT']
-                curr_price_off = row[p_col]
-                curr_margin_theo = row['MARGEM_TEORICA']
-
-                # --- CANDIDATOS (COM FILTRO DE LAB) ---
+                # Encontrar melhor candidato
                 cands = market[
-                    (market['MARGEM_TEORICA'] > curr_margin_theo) &
-                    (market[p_col] <= (curr_price_off + tol)) &
-                    (market['N_REGISTO'] != curr_id) &
-                    # <--- FILTRO APLICADO
-                    (market['LABORATORIO_DESC'].isin(selected_labs))
+                    (market['MARGEM_TEORICA'] > row['MARGEM_TEORICA']) &
+                    (market[p_col] <= (row[p_col] + tol)) &
+                    (market['N_REGISTO'] != row['CPR'])
                 ]
 
                 if not cands.empty:
                     best = cands.sort_values(
                         'MARGEM_TEORICA', ascending=False).iloc[0]
+                    gain_unit = best['MARGEM_TEORICA'] - \
+                        row['MARGEM_REAL_UNIT']
+                    gain_total = gain_unit * row['VENDAS_6M']
 
-                    gain_vs_stock = best['MARGEM_TEORICA'] - curr_margin_real
-                    if gain_vs_stock > 0:
+                    if gain_unit > 0:
                         action = "Trocar Já 🔄"
-                        prio = 1
-                        val_gain = gain_vs_stock * row['VENDAS_6M']
                     else:
                         action = "Esgotar 📉"
-                        prio = 2
-                        val_gain = 0
-
-                    if prio == 1:
-                        tot_gain += val_gain
 
                     results.append({
-                        'CNP': curr_id,
                         'Produto': row['NOM'],
                         'Vol': row['VENDAS_6M'],
-                        'Pr. Atual': curr_price_off,
-                        'CNP Novo': best['N_REGISTO'],
-                        'Sugestão': best['Nome'],
-                        # Mostra o Lab na tabela
-                        # 'Lab. Sug.': best['LABORATORIO_DESC'],
-                        'Pr. Novo': best[p_col],
-                        'Margem Real': curr_margin_real,
-                        'Margem Teórica': curr_margin_theo,
+                        # Comparação de Margens
+                        'Margem Real': row['MARGEM_REAL_UNIT'],
+                        'Mg. Teórica At.': row['MARGEM_TEORICA'],
                         'Nova Margem': best['MARGEM_TEORICA'],
-                        'Delta Preço': best[p_col] - curr_price_off,
-                        'Ganho Est.': val_gain,
+                        # Métricas
+                        'Ganho Unit Delta': best['MARGEM_TEORICA'] - row['MARGEM_REAL_UNIT'],
+                        'Ganho Est.': gain_total if gain_unit > 0 else 0,
                         'Ação': action,
-                        'Priority': prio,
-                        'Ganho_Visual': val_gain if prio == 1 else (best['MARGEM_TEORICA'] - curr_margin_theo) * row['VENDAS_6M']
+                        'Pr. Atual': row[p_col],
+                        'Pr. Novo': best[p_col],
+                        'Delta Preço': best[p_col] - row[p_col],
+                        'Sugestão': best['Nome'],
+                        # Campos Ocultos para Gráficos
+                        'Margem Total Atual': row['MARGEM_REAL_TOTAL'],
+                        'Margem Total Nova': best['MARGEM_TEORICA'] * row['VENDAS_6M']
                     })
 
             if results:
                 rdf = pd.DataFrame(results).sort_values(
-                    ['Priority', 'Ganho Est.'], ascending=[True, False])
+                    'Ganho Est.', ascending=False)
 
-                st.metric("Potencial Ganho Imediato", f"€ {tot_gain:,.2f}")
-                st.scatter_chart(rdf, x='Delta Preço', y='Ganho_Visual',
-                                 color='Ação', size='Vol', height=400)
+                # Métricas de Topo
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Potencial Ganho",
+                          f"€ {rdf['Ganho Est.'].sum():,.2f}")
+                c2.metric("Produtos Analisados", len(rdf))
+                c3.metric("Sugestões Válidas", len(
+                    rdf[rdf['Ação'] == 'Trocar Já 🔄']))
 
+                # --- GRÁFICOS (BUSINESS INTELLIGENCE) ---
+                st.markdown("### 📊 Análise Visual")
+                chart_type = st.radio("Tipo de Gráfico:", [
+                                      "Matriz Estratégica (4 Quadrantes)", "Ponte de Margem (Antes vs Depois)"], horizontal=True)
+
+                if chart_type == "Matriz Estratégica (4 Quadrantes)":
+                    fig, ax = plt.subplots(figsize=(10, 5))
+                    # Tema Escuro/Neon
+                    fig.patch.set_facecolor('#0e0b16')
+                    ax.set_facecolor('#0e0b16')
+
+                    x = rdf['Vol']
+                    y = rdf['Ganho Unit Delta']
+                    x_mid = x.mean() if not x.empty else 0
+                    y_mid = y.mean() if not y.empty else 0
+
+                    # Linhas Médias (Cruz)
+                    ax.axvline(x_mid, color='#d900ff',
+                               linestyle='--', alpha=0.3)
+                    ax.axhline(y_mid, color='#d900ff',
+                               linestyle='--', alpha=0.3)
+
+                    # Quadrantes
+                    ax.text(x.max(), y.max(), '💎 OURO\n(Alta Venda/Alto Ganho)',
+                            color='#00e5ff', ha='right', va='top', fontsize=9, fontweight='bold')
+                    ax.text(x.max(), y.min(), '🐄 CASH COW\n(Alta Venda/Baixo Ganho)',
+                            color='white', ha='right', va='bottom', fontsize=8)
+                    ax.text(x.min(), y.max(), '🎯 NICHO\n(Baixa Venda/Alto Ganho)',
+                            color='white', ha='left', va='top', fontsize=8)
+
+                    # Scatter
+                    sizes = (rdf['Ganho Est.'] /
+                             (rdf['Ganho Est.'].max() + 1) * 500) + 50
+                    ax.scatter(x, y, s=sizes, c='#00e5ff',
+                               alpha=0.7, edgecolors='white')
+
+                    # --- NOVO: ETIQUETAS NOS TOP PRODUTOS ---
+                    # Vamos etiquetar apenas os 7 melhores para não sujar o gráfico
+                    top_items = rdf.head(7)
+
+                    for idx, row in top_items.iterrows():
+                        # Lógica simples para afastar o texto da bola
+                        ax.annotate(
+                            # Corta nomes muito longos
+                            row['Produto'][:45] + '...',
+                            (row['Vol'], row['Ganho Unit Delta']),
+                            xytext=(5, 5), textcoords='offset points',
+                            color='white', fontsize=5, alpha=0.9
+                        )
+                    # ----------------------------------------
+
+                    ax.set_xlabel('Volume (Unidades)', color='white')
+                    ax.set_ylabel('Ganho Unitário Extra (€)', color='white')
+                    ax.tick_params(colors='white')
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
+                    ax.spines['bottom'].set_visible(True)
+                    ax.spines['bottom'].set_color('white')
+                    ax.spines['left'].set_visible(True)
+                    ax.spines['left'].set_color('white')
+                    ax.grid(color='gray', linestyle=':', alpha=0.3)
+                    st.pyplot(fig)
+
+                else:  # Ponte de Margem
+                    top_n = rdf.head(10).sort_values(
+                        'Ganho Est.', ascending=True)
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    fig.patch.set_facecolor('#0e0b16')
+                    ax.set_facecolor('#0e0b16')
+
+                    y_pos = np.arange(len(top_n))
+                    height = 0.35
+
+                    # Barras
+                    ax.barh(y_pos - height/2, top_n['Margem Total Atual'],
+                            height, label='Margem Atual', color='#444444')
+                    bars_new = ax.barh(
+                        y_pos + height/2, top_n['Margem Total Nova'], height, label='Nova Margem', color='#00e5ff')
+
+                    ax.set_yticks(y_pos)
+                    ax.set_yticklabels(top_n['Produto'], color='white')
+                    ax.set_xlabel('Margem Total (€)', color='white')
+                    ax.legend(facecolor='#1a1625', labelcolor='white')
+                    ax.tick_params(colors='white')
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
+                    ax.spines['bottom'].set_visible(True)
+                    ax.spines['bottom'].set_color('white')
+
+                    # Labels nas barras
+                    for bar in bars_new:
+                        ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
+                                f' €{int(bar.get_width())}', va='center', color='white', fontsize=8)
+                    st.pyplot(fig)
+
+                # --- TABELA FINAL ---
                 st.dataframe(
                     rdf.style.format({
-                        'Margem Real': '{:.2f}€', 'Margem Teórica': '{:.2f}€', 'Nova Margem': '{:.2f}€',
-                        'Delta Preço': '{:+.2f}€', 'Ganho Est.': '{:.2f}€',
-                        'Pr. Atual': '{:.2f}€', 'Pr. Novo': '{:.2f}€'
+                        'Margem Real': '{:.2f}€',
+                        'Mg. Teórica At.': '{:.2f}€',
+                        'Nova Margem': '{:.2f}€',
+                        'Delta Preço': '{:+.2f}€',
+                        'Ganho Est.': '{:.2f}€',
+                        'Pr. Atual': '{:.2f}€',
+                        'Pr. Novo': '{:.2f}€'
                     }).background_gradient(subset=['Ganho Est.'], cmap='Greens'),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "Ganho_Visual": None,
-                        "Priority": None,
-                        "CNP": st.column_config.TextColumn("CNP"),
-                        "CNP Novo": st.column_config.TextColumn("CNP Sug."),
-                        # "Lab. Sug.": st.column_config.TextColumn("Laboratório"),
+                        # Colunas Escondidas (usadas só nos gráficos)
+                        "Ganho Unit Delta": None, "Margem Total Atual": None, "Margem Total Nova": None,
+                        # Formatação
                         "Pr. Atual": st.column_config.NumberColumn(f"{lbl_p} At.", format="%.2f €"),
-                        "Pr. Novo": st.column_config.NumberColumn(f"{lbl_p} Novo", format="%.2f €")
+                        "Pr. Novo": st.column_config.NumberColumn(f"{lbl_p} Novo", format="%.2f €"),
+                        "Mg. Teórica At.": st.column_config.NumberColumn("Mg. Teórica (Atual)", help="O que ganharia se comprasse o produto atual hoje."),
+                        "Sugestão": st.column_config.TextColumn("Sugestão de Troca"),
                     }
                 )
                 ui_help.show_glossary()
             else:
-                st.info(
-                    "Portefólio Otimizado (ou sem opções nos laboratórios selecionados).")
-        else:
-            st.warning("Sem dados Classe A.")
+                st.info("Sem oportunidades de melhoria neste grupo.")
     elif isinstance(df, str):
         st.error(df)
-    else:
-        st.error("Erro desconhecido.")
 else:
     st.info("A aguardar ficheiros...")
