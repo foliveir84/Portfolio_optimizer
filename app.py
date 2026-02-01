@@ -41,6 +41,7 @@ def check_login():
         if st.button("Entrar"):
             if username in USERS and USERS[username] == password:
                 st.session_state.authenticated = True
+                st.session_state['username'] = username
                 st.rerun()
             else:
                 st.error("Credenciais inválidas")
