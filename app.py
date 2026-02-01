@@ -221,9 +221,26 @@ up_sales = st.sidebar.file_uploader("Vendas (Infoprex)", type=['txt', 'csv'])
 st.sidebar.caption("Base de Dados Infarmed: " +
                    ("✅" if os.path.exists(master_path) else "⚠️"))
 
-if st.sidebar.button("🔄 Atualizar BD"):
-    download_infarmed_data.download_infarmed_xls()
-    st.rerun()
+# --- AUTO DOWNLOAD MASTER ---
+st.sidebar.markdown("### 2. Mestre (Infarmed)")
+if st.sidebar.button("🔄 Atualizar Base de Dados"):
+    with st.spinner("A descarregar do Infarmed..."):
+        if download_infarmed_data.download_infarmed_xls():
+            st.sidebar.success("Download com sucesso!")
+            st.cache_data.clear()
+        else:
+            st.sidebar.error("Erro no download.")
+
+master_path = "allPackages_python.xls"
+has_master = os.path.exists(master_path)
+
+if has_master:
+    t = os.path.getmtime(master_path)
+    dt = pd.to_datetime(t, unit='s')
+    st.sidebar.caption(
+        f"✅ Ficheiro disponível ({dt.strftime('%d/%m/%Y %H:%M')})")
+else:
+    st.sidebar.warning("⚠️ Ficheiro em falta. Clique em Atualizar.")
 
 up_desc = st.sidebar.file_uploader("Descontos (.xlsx)", type=['xlsx'])
 
